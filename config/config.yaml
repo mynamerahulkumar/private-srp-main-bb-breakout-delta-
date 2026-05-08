@@ -1,0 +1,65 @@
+exchange:
+  api_key: "${DELTA_API_KEY}"
+  api_secret: "${DELTA_API_SECRET}"
+  base_url: "https://api.india.delta.exchange"
+  websocket_url: "wss://socket.india.delta.exchange"
+
+trading:
+  symbols: ["BTCUSD"]
+  product_ids:
+    BTCUSD: 27
+    ETHUSD: 3136
+  timeframe: "1h"
+  leverage: 1
+  quantity: 1
+  order_type: "market_order"
+  paper_trading: true
+
+signal_engine:
+  signal_check_interval_seconds: 30
+  candle_confirmation_enabled: true
+  breakout_confirmation_candles: 1
+  cooldown_seconds: 300
+
+bollinger_bands:
+  bb_enabled: true
+  bb_length: 20
+  bb_std_dev: 2.0
+  bb_source: "close"
+
+rsi:
+  rsi_enabled: true
+  rsi_length: 14
+  rsi_buy_level: 35
+  rsi_sell_level: 65
+
+signal_control:
+  enable_buy_signals: true
+  enable_sell_signals: true
+
+risk_management:
+  stop_loss_percent: 0.35
+  take_profit_percent: 0.75
+  trailing_stop:
+    enabled: false
+    trail_percent: 0.25
+  break_even_enabled: false
+  max_trades_per_day: 5
+  max_open_positions: 1
+  daily_loss_limit: 1500.0
+
+session:
+  trading_start_time: "00:00"
+  trading_end_time: "23:59"
+  square_off_time: "23:55"
+
+system:
+  websocket_enabled: true
+  colored_console: true
+  log_to_file: true
+  log_rotation_enabled: true
+  max_log_file_size_mb: 10
+  retry_count: 5
+  retry_delay: 5
+  candle_history_limit: 200
+  dashboard_enabled: true
