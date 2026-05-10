@@ -141,6 +141,17 @@ def current_run_started_at(matches: list[tuple[int, str, str]]) -> float | None:
     return min(started_at) if started_at else None
 
 
+def latest_logged_start_at() -> float | None:
+    latest_start: float | None = None
+    for line in tail_lines(LOG_DIR / "system.log", 300):
+        if "Connecting websocket:" not in line:
+            continue
+        timestamp = timestamp_from_log_line(line)
+        if timestamp is not None:
+            latest_start = timestamp
+    return latest_start
+
+
 def tail_lines(path: Path, line_count: int) -> list[str]:
     if line_count <= 0:
         return []
@@ -272,7 +283,7 @@ def main() -> int:
     args = parse_args()
     matches = find_bot_processes()
     include_app_logs = not args.no_app_logs
-    current_started_at = current_run_started_at(matches)
+    current_started_at = current_run_started_at(matches) or latest_logged_start_at()
 
     print_status(matches)
     print_logs(args.lines, include_app_logs, current_started_at)
