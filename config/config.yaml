@@ -13,7 +13,7 @@ trading:
   leverage: 1
   quantity: 1
   order_type: "market_order"
-  paper_trading: true
+  paper_trading: false
 
 signal_engine:
   signal_check_interval_seconds: 30
@@ -30,8 +30,8 @@ bollinger_bands:
 rsi:
   rsi_enabled: true
   rsi_length: 14
-  rsi_buy_level: 35
-  rsi_sell_level: 65
+  rsi_buy_level: 30
+  rsi_sell_level: 70
 
 signal_control:
   enable_buy_signals: true

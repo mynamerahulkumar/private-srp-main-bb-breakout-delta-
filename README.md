@@ -51,14 +51,14 @@ Sell confirmation:
 1. Price touches or crosses the upper Bollinger Band.
 2. A bearish candle forms.
 3. The confirmation candle closes below the previous candle low.
-4. RSI is at or above the configured sell level.
+4. RSI is between the configured buy and sell levels.
 
 Buy confirmation:
 
 1. Price touches or crosses the lower Bollinger Band.
 2. A bullish candle forms.
 3. The confirmation candle closes above the previous candle high.
-4. RSI is at or below the configured buy level.
+4. RSI is between the configured buy and sell levels.
 
 ## Logs
 
