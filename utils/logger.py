@@ -107,9 +107,20 @@ def log_snapshot(logger: logging.Logger, snapshot: MonitoringSnapshot) -> None:
         signal.rsi_valid,
         signal.confirmation_active,
     )
+    if signal.band_touch_lower_threshold != 0.0 or signal.band_touch_upper_threshold != 0.0:
+        logger.info(
+            "BAND_TOUCH_DETAIL | eff_L=%.2f eff_U=%.2f | th_L=%.2f th_U=%.2f | minL=%.2f maxH=%.2f | forming=%s",
+            signal.band_touch_lower_line,
+            signal.band_touch_upper_line,
+            signal.band_touch_lower_threshold,
+            signal.band_touch_upper_threshold,
+            signal.band_touch_min_low,
+            signal.band_touch_max_high,
+            signal.band_touch_includes_forming,
+        )
     logger.info(
         "POSITION | ACTIVE=%s | SIDE=%s | ENTRY=%.2f | QTY=%.4f | PNL=%.2f | "
-        "REALIZED=%.2f | UNREALIZED=%.2f | SL=%.2f | TP=%.2f | TRAILING=%s | TRAIL_PERCENT=%.2f",
+        "REALIZED=%.2f | UNREALIZED=%.2f | SL=%.2f | TP=%.2f | EXCHANGE_BRACKET=%s | TRAILING=%s | TRAIL_PERCENT=%.2f",
         position.active,
         position.side or "none",
         position.entry_price,
@@ -119,13 +130,26 @@ def log_snapshot(logger: logging.Logger, snapshot: MonitoringSnapshot) -> None:
         position.unrealized_pnl,
         position.stop_loss,
         position.take_profit,
+        position.exchange_brackets,
         position.trailing_stop_active,
         position.trailing_stop_percent,
     )
+    ex = snapshot.exchange_positions
     logger.info(
-        "DAILY | TRADES=%s/%s | REMAINING=%s | DAILY_PNL=%.2f | LOSS_LIMIT=%.2f | "
+        "EXCHANGE_POSITIONS | SOURCE=%s | OPEN_COUNT=%s | SUM_REALIZED=%.2f | SUM_EST_UNREAL=%.2f | ERROR=%s",
+        ex.source,
+        ex.open_count,
+        ex.sum_realized_pnl,
+        ex.sum_est_unrealized,
+        ex.error or "none",
+    )
+    for line in ex.position_lines:
+        logger.info("EXCHANGE_LEG | %s", line)
+    logger.info(
+        "DAILY | OPENS_CSV=%s | CLOSES_CSV=%s | MAX=%s | REMAINING=%s | DAILY_PNL=%.2f | LOSS_LIMIT=%.2f | "
         "API=%s | WEBSOCKET=%s | NEXT_CHECK=%ss | MEMORY_MB=%.2f | CPU_LOAD_1M=%.2f",
         snapshot.trades_today,
+        snapshot.closed_trades_today,
         snapshot.max_trades_per_day,
         max(snapshot.max_trades_per_day - snapshot.trades_today, 0),
         snapshot.daily_pnl,

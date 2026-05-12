@@ -18,12 +18,18 @@ class SignalGenerator:
         self.strategy = BollingerReversalStrategy(config)
         self._last_trade_at = 0.0
 
-    def evaluate(self, candles: list[Candle], position: PositionState) -> tuple[IndicatorSnapshot, SignalDecision]:
+    def evaluate(
+        self,
+        candles: list[Candle],
+        position: PositionState,
+        forming: Candle | None = None,
+        live_price: float | None = None,
+    ) -> tuple[IndicatorSnapshot, SignalDecision]:
         indicator_snapshot = self.indicators.calculate(candles)
         if position.active:
             return indicator_snapshot, SignalDecision(status="POSITION_ACTIVE", rejected_reason="active position exists")
 
-        decision = self.strategy.evaluate(candles, indicator_snapshot)
+        decision = self.strategy.evaluate(candles, indicator_snapshot, forming, live_price)
         cooldown = int(self.config["signal_engine"].get("cooldown_seconds", 0))
         if decision.should_trade and time.time() - self._last_trade_at < cooldown:
             decision.action = "hold"

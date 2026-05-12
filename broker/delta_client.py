@@ -5,7 +5,7 @@ import hmac
 import json
 import time
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import aiohttp
 
@@ -14,6 +14,60 @@ from utils.helpers import CriticalBotError
 
 class DeltaAPIError(Exception):
     pass
+
+
+def _delta_error_json_from_message(message: str) -> dict[str, Any] | None:
+    start = message.find("{")
+    if start < 0:
+        return None
+    try:
+        parsed = json.loads(message[start:])
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def delta_order_error_code(message: str) -> str | None:
+    body = _delta_error_json_from_message(message)
+    if not body:
+        return None
+    err = body.get("error")
+    if isinstance(err, dict):
+        code = err.get("code")
+        return str(code) if code is not None else None
+    return None
+
+
+def is_recoverable_entry_order_error(message: str) -> bool:
+    """HTTP 400 order rejections that should not crash the trading loop."""
+    code = (delta_order_error_code(message) or "").lower()
+    if code in {"insufficient_margin", "insufficient_liquidity"}:
+        return True
+    lowered = message.lower()
+    return "insufficient_margin" in lowered or "insufficient_liquidity" in lowered
+
+
+def isolated_margin_rejection_hint(message: str) -> str:
+    """Human hint when Delta returns insufficient_margin in isolated mode."""
+    body = _delta_error_json_from_message(message)
+    if not body:
+        return ""
+    err = body.get("error")
+    if not isinstance(err, dict):
+        return ""
+    ctx = err.get("context")
+    if not isinstance(ctx, dict):
+        return ""
+    mode = str(ctx.get("margin_mode", "")).lower()
+    extra = ctx.get("required_additional_balance")
+    avail = ctx.get("available_balance")
+    if mode != "isolated" or extra is None:
+        return ""
+    return (
+        f"Isolated margin: move ~{extra} USD into this contract's isolated wallet on Delta "
+        f"(balance shown in error context: {avail} USD). "
+        "Wallet total can be higher while this product's isolated allocation is short."
+    )
 
 
 class DeltaClient:
@@ -84,6 +138,11 @@ class DeltaClient:
         self._raise_api_error(message)
         raise DeltaAPIError(message)
 
+    async def get_product(self, symbol: str) -> Any:
+        """Public product metadata (includes contract_value for PnL scaling)."""
+        safe = quote(str(symbol), safe="")
+        return await self.request("GET", f"/v2/products/{safe}", auth=False)
+
     async def get_ticker(self, symbol: str) -> dict[str, Any]:
         return await self.request("GET", f"/v2/tickers/{symbol}")
 
@@ -96,6 +155,12 @@ class DeltaClient:
 
     async def get_position(self, product_id: int) -> Any:
         return await self.request("GET", "/v2/positions", query={"product_id": product_id}, auth=True)
+
+    async def get_margined_positions(self, product_ids: list[int] | None = None) -> Any:
+        query: dict[str, Any] | None = None
+        if product_ids:
+            query = {"product_ids": ",".join(str(pid) for pid in product_ids)}
+        return await self.request("GET", "/v2/positions/margined", query=query, auth=True)
 
     async def set_leverage(self, product_id: int, leverage: int | float) -> Any:
         return await self.request(
@@ -113,17 +178,55 @@ class DeltaClient:
         order_type: str,
         limit_price: float | None = None,
         reduce_only: bool = False,
+        *,
+        product_symbol: str | None = None,
+        use_product_symbol_only: bool = False,
+        bracket_stop_loss_price: str | None = None,
+        bracket_take_profit_price: str | None = None,
+        bracket_stop_loss_limit_price: str | None = None,
+        bracket_take_profit_limit_price: str | None = None,
+        bracket_stop_trigger_method: str | None = None,
     ) -> Any:
         payload: dict[str, Any] = {
-            "product_id": product_id,
             "size": int(size),
             "side": side,
             "order_type": order_type,
             "reduce_only": "true" if reduce_only else "false",
         }
+        if use_product_symbol_only and product_symbol:
+            payload["product_symbol"] = str(product_symbol)
+        else:
+            payload["product_id"] = int(product_id)
         if order_type == "limit_order" and limit_price is not None:
             payload["limit_price"] = str(limit_price)
+        if bracket_stop_loss_price is not None:
+            payload["bracket_stop_loss_price"] = bracket_stop_loss_price
+        if bracket_take_profit_price is not None:
+            payload["bracket_take_profit_price"] = bracket_take_profit_price
+        if bracket_stop_loss_limit_price is not None:
+            payload["bracket_stop_loss_limit_price"] = bracket_stop_loss_limit_price
+        if bracket_take_profit_limit_price is not None:
+            payload["bracket_take_profit_limit_price"] = bracket_take_profit_limit_price
+        if bracket_stop_trigger_method is not None:
+            payload["bracket_stop_trigger_method"] = bracket_stop_trigger_method
         return await self.request("POST", "/v2/orders", payload=payload, auth=True)
+
+    async def place_bracket_on_position(
+        self,
+        *,
+        product_symbol: str,
+        stop_loss_order: dict[str, Any],
+        take_profit_order: dict[str, Any],
+        bracket_stop_trigger_method: str,
+    ) -> Any:
+        """Attach TP/SL to an existing open position (POST /v2/orders/bracket)."""
+        body: dict[str, Any] = {
+            "product_symbol": product_symbol,
+            "stop_loss_order": stop_loss_order,
+            "take_profit_order": take_profit_order,
+            "bracket_stop_trigger_method": bracket_stop_trigger_method,
+        }
+        return await self.request("POST", "/v2/orders/bracket", payload=body, auth=True)
 
     def _raise_http_error(self, status: int, text: str) -> None:
         message = f"Delta HTTP {status}: {text[:300]}"

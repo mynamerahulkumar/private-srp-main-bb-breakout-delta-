@@ -5,7 +5,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from utils.helpers import MonitoringSnapshot
+from utils.helpers import ExchangePositionOverview, MonitoringSnapshot
 
 
 class Dashboard:
@@ -64,37 +64,76 @@ def _decision_table(snapshot: MonitoringSnapshot) -> Table:
 
 def _position_risk_table(snapshot: MonitoringSnapshot) -> Table:
     position = snapshot.position
+    ex = snapshot.exchange_positions
     table = Table(title="Position And Risk", expand=True)
     table.add_column("Metric", style="green")
     table.add_column("Value")
+    table.add_row("Bot-tracked position", _bot_position_summary(position))
     if position.active:
-        table.add_row("Position", f"ACTIVE {position.side.upper()}")
-        table.add_row("Entry Price", _num(position.entry_price))
-        table.add_row("Current PnL", _num(position.current_pnl))
+        table.add_row("Entry (bot)", _num(position.entry_price))
+        table.add_row("Current PnL (bot, USD)", _usd(position.current_pnl))
         table.add_row("Stop Loss", _num(position.stop_loss))
         table.add_row("Take Profit", _num(position.take_profit))
         table.add_row("Trailing Stop", "ACTIVE" if position.trailing_stop_active else "OFF")
-    else:
-        table.add_row("Position", "NO ACTIVE POSITION")
-    table.add_row("Trades Today", f"{snapshot.trades_today} / {snapshot.max_trades_per_day}")
-    table.add_row("Remaining Trades", str(max(snapshot.max_trades_per_day - snapshot.trades_today, 0)))
-    table.add_row("Daily PnL", _num(snapshot.daily_pnl))
-    table.add_row("Daily Loss Limit", _num(snapshot.daily_loss_limit))
+        table.add_row("TP/SL on exchange", "yes (Delta bracket)" if position.exchange_brackets else "no (bot price only)")
+    table.add_row("Opens today (bot CSV)", _opens_today_cell(snapshot, ex))
+    table.add_row("Closes today (bot CSV)", str(snapshot.closed_trades_today))
+    table.add_row(
+        "CSV scope",
+        "Only fills from this bot's OrderManager; manual Delta orders are not logged",
+    )
+    table.add_row("Remaining (bot limit)", str(max(snapshot.max_trades_per_day - snapshot.trades_today, 0)))
+    table.add_row("Daily PnL (bot log, USD)", _usd(snapshot.daily_pnl))
+    table.add_row("Daily loss limit", _num(snapshot.daily_loss_limit))
+    _add_exchange_rows(table, ex)
     return table
+
+
+def _opens_today_cell(snapshot: MonitoringSnapshot, ex: ExchangePositionOverview) -> str:
+    cell = f"{snapshot.trades_today} / {snapshot.max_trades_per_day} (OPEN rows in logs/trades.csv)"
+    if ex.source == "ok":
+        cell += f" — exchange {ex.open_count} open"
+    return cell
+
+
+def _bot_position_summary(position) -> str:
+    if position.active:
+        return f"ACTIVE {position.side.upper()}"
+    return "none (bot has not opened a position this run)"
+
+
+def _add_exchange_rows(table: Table, ex: ExchangePositionOverview) -> None:
+    if ex.source == "off":
+        table.add_row("Exchange positions", "fetch disabled (dashboard_exchange_positions)")
+        return
+    if ex.source == "paper":
+        table.add_row("Exchange positions", "paper trading — not fetched")
+        return
+    if ex.source == "error":
+        table.add_row("Exchange positions", f"error: {ex.error}")
+        return
+    table.add_row("Open on exchange (API)", str(ex.open_count))
+    if ex.open_count == 0:
+        table.add_row("Exchange PnL (open legs)", "n/a (no open positions)")
+        return
+    table.add_row("Sum realized PnL (exchange, USD)", _usd(ex.sum_realized_pnl))
+    table.add_row("Est. unrealized USD (mark−entry)×contracts×cv)", _usd(ex.sum_est_unrealized))
+    for line in ex.position_lines:
+        table.add_row("— leg", line)
 
 
 def _buy_trigger(snapshot: MonitoringSnapshot) -> str:
     previous = snapshot.previous_candle
     if not previous:
         return "n/a"
-    return f"BUY above previous high > {_num(previous.high)}"
+    return f"BUY at/above previous high >= {_num(previous.high)}"
 
 
 def _sell_trigger(snapshot: MonitoringSnapshot) -> str:
     previous = snapshot.previous_candle
     if not previous:
         return "n/a"
-    return f"SELL below previous low < {_num(previous.low)}"
+    return f"SELL at/below previous low <= {_num(previous.low)}"
 
 
 def _current_candle_summary(snapshot: MonitoringSnapshot) -> str:
@@ -106,20 +145,40 @@ def _current_candle_summary(snapshot: MonitoringSnapshot) -> str:
 
 def _band_touch_summary(snapshot: MonitoringSnapshot) -> str:
     indicators = snapshot.indicators
-    return f"Upper {_num(indicators.upper_band)} | Lower {_num(indicators.lower_band)}"
+    signal = snapshot.signal
+    line = f"BB Lower {_num(indicators.lower_band)} | Upper {_num(indicators.upper_band)}"
+    if signal.band_touch_lower_threshold != 0.0 or signal.band_touch_upper_threshold != 0.0:
+        suffix = " +form" if signal.band_touch_includes_forming else ""
+        line += (
+            f" | eff L {_num(signal.band_touch_lower_line)} U {_num(signal.band_touch_upper_line)}"
+            f" | long if minL≤{_num(signal.band_touch_lower_threshold)}"
+            f" | short if maxH≥{_num(signal.band_touch_upper_threshold)}"
+            f" | ext L/H {_num(signal.band_touch_min_low)}/{_num(signal.band_touch_max_high)}{suffix}"
+        )
+    return line
 
 
 def _band_touch_status(snapshot: MonitoringSnapshot) -> str:
     signal = snapshot.signal
     if signal.upper_band_touched:
-        return "UPPER TOUCHED"
+        return "NEAR UPPER"
     if signal.lower_band_touched:
-        return "LOWER TOUCHED"
-    return "NO TOUCH"
+        return "NEAR LOWER"
+    return "OUTSIDE ZONE"
 
 
 def _num(value: float) -> str:
     return f"{value:.2f}"
+
+
+def _usd(value: float) -> str:
+    """USD PnL: more decimals when the magnitude is small (typical perp PnL)."""
+    magnitude = abs(value)
+    if magnitude >= 1000:
+        return f"{value:,.2f} USD"
+    if magnitude >= 1:
+        return f"{value:.2f} USD"
+    return f"{value:.4f} USD"
 
 
 def _yes(value: bool) -> str:

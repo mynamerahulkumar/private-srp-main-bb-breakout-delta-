@@ -28,6 +28,9 @@ class RiskManager:
             return False
         return True
 
+    def closed_trades_today(self) -> int:
+        return self.tracker.closed_count_today()
+
     def trades_today(self) -> int:
         return self.tracker.count_today()
 

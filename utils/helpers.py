@@ -126,6 +126,14 @@ class SignalDecision:
     previous_high_broken: bool = False
     rsi_valid: bool = False
     confirmation_active: bool = False
+    # Band proximity diagnostics (filled by BollingerReversalStrategy when BB enabled)
+    band_touch_min_low: float = 0.0
+    band_touch_max_high: float = 0.0
+    band_touch_lower_line: float = 0.0
+    band_touch_upper_line: float = 0.0
+    band_touch_lower_threshold: float = 0.0
+    band_touch_upper_threshold: float = 0.0
+    band_touch_includes_forming: bool = False
 
     @property
     def should_trade(self) -> bool:
@@ -138,8 +146,12 @@ class PositionState:
     side: str = ""
     entry_price: float = 0.0
     quantity: float = 0.0
+    # (mark - entry) * quantity * contract_value ≈ USD PnL for vanilla linear perps on Delta
+    contract_value: float = 1.0
     stop_loss: float = 0.0
     take_profit: float = 0.0
+    """True when SL/TP were sent to Delta (bracket); validate_exit syncs flat from exchange."""
+    exchange_brackets: bool = False
     trailing_stop_active: bool = False
     trailing_stop_percent: float = 0.0
     trailing_reference_price: float = 0.0
@@ -149,6 +161,18 @@ class PositionState:
     @property
     def current_pnl(self) -> float:
         return self.realized_pnl + self.unrealized_pnl
+
+
+@dataclass(slots=True)
+class ExchangePositionOverview:
+    """Open legs from Delta GET /v2/positions/margined; not the same as bot-managed PositionState."""
+
+    source: Literal["off", "paper", "ok", "error"] = "off"
+    error: str = ""
+    open_count: int = 0
+    position_lines: tuple[str, ...] = ()
+    sum_realized_pnl: float = 0.0
+    sum_est_unrealized: float = 0.0
 
 
 @dataclass(slots=True)
@@ -162,6 +186,7 @@ class MonitoringSnapshot:
     signal: SignalDecision
     position: PositionState
     trades_today: int
+    closed_trades_today: int
     max_trades_per_day: int
     daily_pnl: float
     daily_loss_limit: float
@@ -172,6 +197,9 @@ class MonitoringSnapshot:
     running_seconds: int
     memory_mb: float
     cpu_load_1m: float
+    # Live bar for current bucket (if any); band proximity can include it when enabled in config.
+    forming_candle: Candle | None = None
+    exchange_positions: ExchangePositionOverview = field(default_factory=ExchangePositionOverview)
     created_at: str = field(default_factory=lambda: now_ist().strftime("%Y-%m-%d %H:%M:%S"))
 
     def to_dict(self) -> dict[str, Any]:

@@ -5,7 +5,12 @@ import signal
 import time
 from contextlib import suppress
 
-from broker.delta_client import DeltaClient
+from broker.delta_client import (
+    DeltaAPIError,
+    DeltaClient,
+    is_recoverable_entry_order_error,
+    isolated_margin_rejection_hint,
+)
 from broker.order_manager import OrderManager
 from broker.websocket_client import DeltaWebSocketClient
 from strategy.risk_manager import RiskManager
@@ -15,6 +20,7 @@ from utils.helpers import (
     BotShutdown,
     Candle,
     CriticalBotError,
+    ExchangePositionOverview,
     MonitoringSnapshot,
     ensure_directories,
     load_config,
@@ -66,10 +72,11 @@ class TradingBot:
         try:
             while not self._stop.is_set():
                 started = time.time()
+                exchange_overview = await self._exchange_overview()
                 for symbol in symbols:
                     if self._stop.is_set():
                         break
-                    await self._cycle(symbol, interval)
+                    await self._cycle(symbol, interval, exchange_overview)
                 elapsed = time.time() - started
                 with suppress(asyncio.TimeoutError):
                     await asyncio.wait_for(self._stop.wait(), timeout=max(interval - elapsed, 1))
@@ -95,7 +102,19 @@ class TradingBot:
         self.dashboard.stop()
         self.loggers["system"].info("Bot shutdown complete")
 
-    async def _cycle(self, symbol: str, interval: int) -> None:
+    async def _exchange_overview(self) -> ExchangePositionOverview:
+        if not self.config["system"].get("dashboard_exchange_positions", True):
+            return ExchangePositionOverview(source="off")
+        if self.order_manager.paper_trading:
+            return ExchangePositionOverview(source="paper")
+        prices: dict[str, float] = {}
+        for sym in self.config["trading"]["symbols"]:
+            p = self.websocket.latest_price(sym)
+            if p and p > 0:
+                prices[sym] = float(p)
+        return await self.order_manager.load_exchange_positions(prices)
+
+    async def _cycle(self, symbol: str, interval: int, exchange_overview: ExchangePositionOverview) -> None:
         if not is_time_between(
             self.config["session"]["trading_start_time"],
             self.config["session"]["trading_end_time"],
@@ -111,14 +130,33 @@ class TradingBot:
             self.loggers["system"].warning("Not enough candle data for %s", symbol)
             return
 
+        forming = _forming_candle(candles, timeframe)
         current_price = self.websocket.latest_price(symbol) or candles[-1].close
         await self.order_manager.validate_exit(symbol, current_price)
         self.risk_manager.validate_daily_limits(self.order_manager.position.active)
-        indicators, decision = self.signal_generator.evaluate(signal_candles, self.order_manager.position)
+        indicators, decision = self.signal_generator.evaluate(
+            signal_candles,
+            self.order_manager.position,
+            forming,
+            current_price,
+        )
 
         if decision.should_trade and self.risk_manager.validate_open_position_limit(self.order_manager.position):
-            await self.order_manager.open_position(symbol, decision.action, current_price)
-            self.signal_generator.mark_trade_executed()
+            try:
+                await self.order_manager.open_position(symbol, decision.action, current_price)
+            except DeltaAPIError as exc:
+                msg = str(exc)
+                if is_recoverable_entry_order_error(msg):
+                    hint = isolated_margin_rejection_hint(msg)
+                    self.loggers["trading"].warning("Entry order rejected by Delta: %s", msg)
+                    if hint:
+                        self.loggers["trading"].warning("%s", hint)
+                    panel = hint or msg
+                    self.dashboard.alert(f"Entry skipped — {panel[:400]}", style="bold yellow")
+                else:
+                    raise
+            else:
+                self.signal_generator.mark_trade_executed()
 
         usage = system_usage()
         snapshot = MonitoringSnapshot(
@@ -131,6 +169,7 @@ class TradingBot:
             signal=decision,
             position=self.order_manager.position,
             trades_today=self.risk_manager.trades_today(),
+            closed_trades_today=self.risk_manager.closed_trades_today(),
             max_trades_per_day=int(self.config["risk_management"]["max_trades_per_day"]),
             daily_pnl=self.risk_manager.daily_pnl(),
             daily_loss_limit=float(self.config["risk_management"]["daily_loss_limit"]),
@@ -141,6 +180,8 @@ class TradingBot:
             running_seconds=int(time.time() - self._started_at),
             memory_mb=usage["memory_mb"],
             cpu_load_1m=usage["cpu_load_1m"],
+            forming_candle=forming,
+            exchange_positions=exchange_overview,
         )
         log_snapshot(self.loggers["trading"], snapshot)
         self.dashboard.update(snapshot)
@@ -193,6 +234,17 @@ def _merge_candles(backfill: list[Candle], websocket_candles: list[Candle]) -> l
 def _completed_candles(candles: list[Candle], timeframe: str, now: int | None = None) -> list[Candle]:
     current_bucket = normalize_candle_timestamp(now or unix_seconds(), timeframe)
     return [candle for candle in candles if candle.timestamp < current_bucket]
+
+
+def _forming_candle(candles: list[Candle], timeframe: str, now: int | None = None) -> Candle | None:
+    """Current in-progress bar from the feed, if present (same timestamp as current bucket)."""
+    if not candles:
+        return None
+    bucket = normalize_candle_timestamp(now or unix_seconds(), timeframe)
+    last = candles[-1]
+    if last.timestamp >= bucket:
+        return last
+    return None
 
 
 async def async_main() -> int:

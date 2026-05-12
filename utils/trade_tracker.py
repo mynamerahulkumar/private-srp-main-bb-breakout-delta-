@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
 
@@ -56,7 +56,7 @@ class TradeTracker:
     def append(self, record: TradeRecord) -> None:
         with self.path.open("a", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=TRADE_FIELDS)
-            writer.writerow(record.__dict__)
+            writer.writerow(asdict(record))
 
     def rows(self) -> Iterable[dict[str, str]]:
         self._ensure_file()
