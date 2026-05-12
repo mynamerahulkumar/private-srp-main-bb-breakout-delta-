@@ -65,7 +65,7 @@ risk_management:
     enabled: false
     trail_percent: 0.25
   break_even_enabled: false
-  max_trades_per_day: 3
+  max_trades_per_day: 4
   max_open_positions: 5
   daily_loss_limit: 1500.0
   # Send TP/SL to Delta (CreateOrderRequest bracket_* or POST /orders/bracket), not only in-bot monitoring
@@ -83,6 +83,8 @@ session:
   square_off_time: "23:55"
 
 system:
+  # Seconds run_bot_once.py tails logs/cli.log; trading bot keeps running after the script exits.
+  run_bot_once_cli_follow_seconds: 30
   websocket_enabled: true
   colored_console: true
   log_to_file: true

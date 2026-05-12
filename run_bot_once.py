@@ -1,3 +1,12 @@
+"""Start the trading bot in the background and tail CLI output briefly.
+
+Trading behavior is defined by config/config.yaml (loaded inside start.py → main.TradingBot).
+This script only: (1) starts start.py detached if no matching process exists, (2) prints new
+lines from logs/cli.log for a configurable duration, (3) exits without stopping the bot.
+
+Run from the repository root so `import utils.helpers` resolves (e.g. `uv run run_bot_once.py`).
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -8,13 +17,15 @@ import sys
 import time
 from pathlib import Path
 
+from utils.helpers import load_config
+
 
 REPO_ROOT = Path(__file__).resolve().parent
 ENTRYPOINTS = ("start.py", "main.py")
 SCRIPT_NAME = Path(__file__).name
 LOG_DIR = REPO_ROOT / "logs"
 CLI_LOG_PATH = LOG_DIR / "cli.log"
-FOLLOW_SECONDS = 30.0
+DEFAULT_FOLLOW_SECONDS = 30.0
 POLL_INTERVAL_SECONDS = 0.25
 
 
@@ -146,7 +157,7 @@ def follow_cli_log(seconds: float) -> None:
         remaining = deadline - time.monotonic()
         time.sleep(min(POLL_INTERVAL_SECONDS, max(remaining, 0)))
 
-    print("\nStopped printing CLI logs. Bot process was not stopped.")
+    print("\nStopped printing CLI logs (this script exits; the trading bot was not stopped).")
 
 
 def parse_args() -> argparse.Namespace:
@@ -156,27 +167,42 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--seconds",
         type=float,
-        default=FOLLOW_SECONDS,
-        help="Number of seconds to print new CLI log output before exiting.",
+        default=None,
+        help="Seconds to tail logs/cli.log (default: system.run_bot_once_cli_follow_seconds in config.yaml).",
     )
     return parser.parse_args()
 
 
+def _follow_seconds_from_config(cli_seconds: float | None) -> float:
+    if cli_seconds is not None:
+        return float(cli_seconds)
+    cfg = load_config()
+    raw = cfg.get("system", {}).get("run_bot_once_cli_follow_seconds", DEFAULT_FOLLOW_SECONDS)
+    return float(raw)
+
+
 def main() -> int:
     args = parse_args()
-    if args.seconds < 0:
-        print("--seconds must be zero or greater", file=sys.stderr)
+    follow_seconds = _follow_seconds_from_config(args.seconds)
+    if follow_seconds < 0:
+        print("--seconds / config follow duration must be zero or greater", file=sys.stderr)
         return 2
 
     matches = find_bot_processes()
+    started_pid: int | None = None
     if matches:
         print("Bot is already running. Reusing existing process.")
         print_bot_processes(matches)
     else:
-        pid = start_bot_detached()
-        print(f"Bot was stopped. Started detached bot process with PID: {pid}")
+        started_pid = start_bot_detached()
+        print(f"No bot was running. Started detached bot process with PID: {started_pid}")
 
-    follow_cli_log(args.seconds)
+    follow_cli_log(follow_seconds)
+
+    if matches:
+        print("CLI follow finished. Trading bot continues in the background (existing process, see PID above).")
+    else:
+        print(f"CLI follow finished. Trading bot continues in the background (PID {started_pid}).")
     return 0
 
 
