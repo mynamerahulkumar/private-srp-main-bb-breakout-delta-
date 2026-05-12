@@ -15,7 +15,7 @@ trading:
     ETHUSD: 0.001
   timeframe: "5m"
   leverage: 25
-  quantity: 10
+  quantity: 1
   order_type: "market_order"
   paper_trading: false
 
@@ -66,7 +66,7 @@ risk_management:
     trail_percent: 0.25
   break_even_enabled: false
   max_trades_per_day: 3
-  max_open_positions: 20
+  max_open_positions: 5
   daily_loss_limit: 1500.0
   # Send TP/SL to Delta (CreateOrderRequest bracket_* or POST /orders/bracket), not only in-bot monitoring
   exchange_bracket_orders: true
