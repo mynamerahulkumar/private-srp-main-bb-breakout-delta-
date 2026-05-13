@@ -1,8 +1,11 @@
-"""Start the trading bot in the background and tail CLI output briefly.
+"""Start the same trading bot as start.py in the background, then tail CLI output briefly.
 
-Trading behavior is defined by config/config.yaml (loaded inside start.py → main.TradingBot).
-This script only: (1) starts start.py detached if no matching process exists, (2) prints new
-lines from logs/cli.log for a configurable duration, (3) exits without stopping the bot.
+The detached child runs start.py → main.main() → TradingBot (identical code path to running
+start.py directly). Market entries and Delta bracket TP/SL happen only when the strategy
+signals; see logs/trading.log for ENTRY+BRACKET / bracket attach lines, not only this tail.
+
+This script: (1) starts start.py detached if no matching process exists, (2) prints new lines
+from logs/cli.log for a configurable duration, (3) exits without stopping the bot.
 
 Run from the repository root so `import utils.helpers` resolves (e.g. `uv run run_bot_once.py`).
 """
@@ -91,7 +94,7 @@ def references_this_bot(pid: int, command: str) -> bool:
         return False
 
     script_paths = {str((REPO_ROOT / entrypoint).resolve()) for entrypoint in ENTRYPOINTS}
-    if any(token in script_paths for token in tokens):
+    if any(script_path in command for script_path in script_paths):
         return True
 
     if not any(token_name in ENTRYPOINTS for token_name in token_names):
@@ -118,7 +121,7 @@ def start_bot_detached() -> int:
 
     with Path(os.devnull).open("r") as stdin, Path(os.devnull).open("a") as devnull:
         process = subprocess.Popen(
-            [sys.executable, str(REPO_ROOT / "start.py")],
+            [sys.executable, "-u", str(REPO_ROOT / "start.py")],
             cwd=REPO_ROOT,
             stdin=stdin,
             stdout=devnull,
@@ -162,13 +165,19 @@ def follow_cli_log(seconds: float) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Start the trading bot if needed, print CLI logs briefly, then exit.",
+        description=(
+            "Start the same bot as start.py if needed, tail logs/cli.log briefly, then exit "
+            "(bot keeps running). Orders and TP/SL follow the strategy; see logs/trading.log."
+        ),
     )
     parser.add_argument(
         "--seconds",
         type=float,
         default=None,
-        help="Seconds to tail logs/cli.log (default: system.run_bot_once_cli_follow_seconds in config.yaml).",
+        help=(
+            "Seconds to tail logs/cli.log (default: system.run_bot_once_cli_follow_seconds in "
+            "config.yaml). Bracket placement is logged in logs/trading.log when a signal fires."
+        ),
     )
     return parser.parse_args()
 
