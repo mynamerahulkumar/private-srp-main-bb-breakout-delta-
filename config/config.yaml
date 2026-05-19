@@ -5,7 +5,7 @@ exchange:
   websocket_url: "wss://socket.india.delta.exchange"
 
 trading:
-  symbols: ["BTCUSD"]
+  symbols: ["ETHUSD"]
   product_ids:
     BTCUSD: 27
     ETHUSD: 3136
@@ -59,8 +59,8 @@ signal_control:
   enable_sell_signals: true
 
 risk_management:
-  stop_loss_percent: 0.1
-  take_profit_percent: 0.2
+  stop_loss_percent: 0.2
+  take_profit_percent: 0.4
   trailing_stop:
     enabled: false
     trail_percent: 0.25
